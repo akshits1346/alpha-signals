@@ -23,7 +23,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
-from src.execution_sim import twap_execute, vwap_execute
+from src.execution_sim import twap_execute, vwap_execute, twap_execute_with_impact, market_impact_fraction
 
 failures = 0
 
@@ -70,6 +70,58 @@ def main():
         check(False, "should reject mismatched prices/volumes lengths")
     except ValueError:
         check(True, "correctly rejects mismatched prices/volumes lengths")
+
+    # --- market impact: hand-traced exact case ---
+    # prices=[100,100,100,100] (flat -- isolates impact from any drift
+    # effect), total_quantity=400, n_slices=4, avg_volume=10000,
+    # impact_coefficient=0.01, exponent=0.5 (the default):
+    #   slice_qty = 100, participation = 100/10000 = 0.01
+    #   impact_fraction = 0.01 * sqrt(0.01) = 0.01 * 0.1 = 0.001
+    #   effective_price = 100 * 1.001 = 100.1 (same on every slice, flat prices)
+    #   shortfall (buy) = (100.1 - 100) * 400 = 40.0
+    flat_prices = np.array([100.0, 100.0, 100.0, 100.0])
+    impact_frac = market_impact_fraction(100, 10000, impact_coefficient=0.01, exponent=0.5)
+    check(abs(impact_frac - 0.001) < 1e-12, f"market_impact_fraction == 0.001, got {impact_frac}")
+
+    impact_result = twap_execute_with_impact(flat_prices, total_quantity=400, n_slices=4,
+                                             avg_volume=10000, side="buy", impact_coefficient=0.01)
+    check(abs(impact_result.avg_execution_price - 100.1) < 1e-9,
+          f"impact-adjusted avg_execution_price == 100.1, got {impact_result.avg_execution_price}")
+    check(abs(impact_result.implementation_shortfall - 40.0) < 1e-6,
+          f"impact-adjusted shortfall == 40.0, got {impact_result.implementation_shortfall}")
+
+    # --- the actual point: on a FLAT price series (no drift at all, so
+    # ONLY impact can contribute to shortfall), FEWER slices means a
+    # BIGGER clip per slice, which the square-root law says costs MORE
+    # impact per slice -- the exact OPPOSITE direction from the drift
+    # effect execution_speed_experiment.py found. This is what makes
+    # "always execute in 1 slice" no longer strictly free. ---
+    r_n1 = twap_execute_with_impact(flat_prices, total_quantity=400, n_slices=1,
+                                    avg_volume=10000, side="buy", impact_coefficient=0.01)
+    r_n4 = twap_execute_with_impact(flat_prices, total_quantity=400, n_slices=4,
+                                    avg_volume=10000, side="buy", impact_coefficient=0.01)
+    check(r_n1.implementation_shortfall > r_n4.implementation_shortfall,
+          f"fewer slices (bigger clips) cost MORE impact-only shortfall: "
+          f"n=1 gives {r_n1.implementation_shortfall:.2f}, n=4 gives {r_n4.implementation_shortfall:.2f}")
+    # exact values, not just a direction: n=1 clip=400, participation=0.04,
+    # impact=0.01*sqrt(0.04)=0.002, shortfall=0.002*100*400=80.0
+    check(abs(r_n1.implementation_shortfall - 80.0) < 1e-6,
+          f"n=1 impact-only shortfall == 80.0 exactly, got {r_n1.implementation_shortfall}")
+
+    # --- sell side: impact should push the fill price DOWN, giving
+    # POSITIVE shortfall too (impact always costs the trader, regardless
+    # of side -- unlike drift, which can go either way) ---
+    r_sell = twap_execute_with_impact(flat_prices, total_quantity=400, n_slices=4,
+                                      avg_volume=10000, side="sell", impact_coefficient=0.01)
+    check(r_sell.avg_execution_price < 100.0, f"sell-side impact pushes fill price DOWN, got {r_sell.avg_execution_price}")
+    check(r_sell.implementation_shortfall > 0, f"impact costs the trader on the sell side too, got {r_sell.implementation_shortfall}")
+
+    # --- input validation ---
+    try:
+        twap_execute_with_impact(flat_prices, total_quantity=100, n_slices=4, avg_volume=0)
+        check(False, "should reject non-positive avg_volume")
+    except ValueError:
+        check(True, "correctly rejects non-positive avg_volume")
 
     print()
     if failures == 0:

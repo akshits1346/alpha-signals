@@ -27,6 +27,9 @@ execution_sim.py    -- TWAP (equal slices, equal time) and VWAP
                         (slices proportional to volume) execution
                         simulation, with implementation shortfall
                         (realized avg fill price vs. arrival price).
+                        twap_execute_with_impact adds a square-root-law
+                        market impact cost on top of TWAP -- see
+                        finding #5 below.
 
 run_pairs_with_execution.py
                      -- ties the above together: generates entry
@@ -58,8 +61,8 @@ pip3 install statsmodels numpy
 python3 tests/test_cointegration.py     # 9 checks
 python3 tests/test_pairs_strategy.py    # 5 checks
 python3 tests/test_walk_forward.py      # 6 checks
-python3 tests/test_execution_sim.py     # 8 checks
-python3 tests/test_execution_speed_experiment.py  # 13 checks
+python3 tests/test_execution_sim.py     # 15 checks (incl. market impact)
+python3 tests/test_execution_speed_experiment.py  # 17 checks (incl. impact-vs-drift optimum)
 python3 tests/test_synthetic_data_realism.py      # 6 checks: fat tails + volatility clustering
 
 python3 run_pairs_with_execution.py         # end-to-end demonstration
@@ -129,6 +132,42 @@ of this claim (a linear, deterministic reversion path where the
 relationship has a closed form) is proven exactly, not just observed,
 in `tests/test_execution_speed_experiment.py`.
 
+**5. But finding #4 makes "always execute in 1 slice" look strictly
+free -- it isn't, once market impact is priced in.** `execution_sim.py`
+now has `twap_execute_with_impact`, a square-root-law temporary impact
+model (`impact = impact_coefficient * (slice_qty/avg_volume)^0.5`, the
+standard empirical form for temporary price impact): bigger clips (fewer
+slices) cost MORE impact per slice, the opposite direction from finding
+#4's drift effect. Re-running the same 15 entries with impact priced in
+(`avg_volume=50, impact_coefficient=2.5` -- a deliberately illiquid
+scenario, see the comment in `run_execution_speed_experiment.py` for
+why: at gentler, more realistic participation rates tried first, drift
+cost dominated impact by 1-2 orders of magnitude on this dataset's
+actual spread scale, and window=1 stayed optimal outright):
+
+| window (slices) | total shortfall (drift + impact) |
+|---|---|
+| 1 | 3073.66 |
+| 2 | **2790.03** |
+| 3 | 2944.30 |
+| 5 | 3175.44 |
+| 10 | 3321.11 |
+| 20 | 3283.42 |
+
+An INTERIOR minimum at window=2, beating both window=1 and window=20 --
+neither "always execute instantly" nor "always execute slowly" is
+optimal once both effects are priced in. The exact version of this (a
+deterministic case with a provable interior minimum, found empirically
+and verified, not asserted from a closed form since drift+impact
+together don't have as clean a formula as drift alone) is in
+`tests/test_execution_speed_experiment.py`. Reporting honestly that it
+took an illiquid-instrument parameter regime to actually flip the
+window=1-is-optimal conclusion on THIS dataset matters as much as the
+interior-optimum result itself -- the mechanism is real and provably
+correct, but it doesn't automatically change the practical
+recommendation at every parameter setting, and pretending otherwise
+would be exactly the kind of overclaiming this project tries to avoid.
+
 ## Honest limitations
 
 - **All of the above is on synthetic data** (constructed pairs and
@@ -157,6 +196,14 @@ in `tests/test_execution_speed_experiment.py`.
   volume profile for VWAP and realistic slippage for TWAP, rather than
   assuming the spread itself is directly tradable at whatever price it
   shows.
+- **The market impact model is TEMPORARY-only**: each slice's impact is
+  computed independently and doesn't persist to the next slice or
+  permanently shift the price path. A large enough real trade also has
+  a PERMANENT component (the market re-prices based on the information
+  your trading reveals), which this model doesn't capture -- it likely
+  understates the true cost of trading a genuinely large position.
+  `avg_volume` and `impact_coefficient` are also illustrative, not
+  calibrated to any specific real instrument's actual liquidity.
 - **The z-score strategy's parameters (lookback=20, entry_z=2.0,
   exit_z=0.5, stop_z=3.5) are conventional defaults, not optimized or
   validated** against any specific data.
@@ -171,8 +218,10 @@ in `tests/test_execution_speed_experiment.py`.
   a real depth/volume profile from order book data
 - Optimize/validate the z-score strategy's parameters via the
   walk-forward framework already built, rather than using un-tuned defaults
-- Now that faster execution is confirmed to reduce shortfall, quantify
-  the actual tradeoff against market impact (this project's execution
-  model has no impact cost, so "always execute in 1 slice" currently
-  looks strictly free -- a real venue would make slicing costly for a
-  different reason, and that's the missing other side of this tradeoff)
+- Find the actual optimal window/impact-coefficient tradeoff curve
+  (sweep impact_coefficient itself, not just window) rather than the
+  single illustrative parameter setting used in finding #5 above
+- Permanent, not just temporary, impact (a large enough trade can move
+  the price for the REST of the session, not just its own fill) --
+  the current model resets to zero impact influence on every fresh
+  slice, which understates the true cost of trading a large position

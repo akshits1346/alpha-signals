@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.cointegration import test_cointegration, compute_spread
 from src.pairs_strategy import generate_signals, PairsStrategyConfig, Position
-from src.execution_speed_experiment import speed_sweep
+from src.execution_speed_experiment import speed_sweep, speed_sweep_with_impact
 from run_pairs_with_execution import generate_synthetic_pair
 
 
@@ -57,6 +57,47 @@ def main():
     print("\n(Positive = executions cost more than instant-fill-at-signal-price would have.")
     print(" If finding #3's mechanism is what's really driving the cost, shortfall should")
     print(" shrink toward zero as window size shrinks toward 1.)")
+
+    # --- now add market impact: does "always execute in 1 slice" stop
+    # being optimal once your own trading footprint has a cost too?
+    # NOTE on these parameters: avg_volume=50 with quantity=100 means a
+    # single-slice fill is 2x "average volume" -- a deliberately
+    # illiquid/oversized scenario, not a typical liquid blue-chip stock.
+    # That's not an accident: at gentler, more realistic participation
+    # rates (tried first -- see the README), drift cost dominated
+    # impact by 1-2 orders of magnitude on this dataset's actual spread
+    # scale, and window=1 stayed optimal outright. It takes a fairly
+    # illiquid instrument for the impact effect to actually flip the
+    # practical answer here, which is itself worth reporting honestly
+    # rather than picking parameters after the fact to force a more
+    # dramatic-looking result. ---
+    print("\n" + "=" * 70)
+    print("Same entries, WITH market impact priced in (square-root law,")
+    print("avg_volume=50, impact_coefficient=2.5 -- a deliberately illiquid")
+    print("scenario; see the comment in this file for why):")
+    print("=" * 70 + "\n")
+
+    impact_results = speed_sweep_with_impact(paths, sides, quantity=100, windows=windows,
+                                              avg_volume=50, impact_coefficient=2.5)
+    print(f"{'window (slices)':>16} {'total shortfall':>18} {'mean shortfall':>16} {'n entries':>10}")
+    print("-" * 62)
+    for point in impact_results:
+        print(f"{point.window:>16} {point.total_shortfall:>18.2f} {point.mean_shortfall:>16.2f} {point.n_entries:>10}")
+
+    totals = [p.total_shortfall for p in impact_results]
+    min_idx = totals.index(min(totals))
+    optimal_window = impact_results[min_idx].window
+    if min_idx == 0:
+        print(f"\nOptimal window is still window=1 (instant) -- at these parameters, impact isn't")
+        print("large enough to outweigh the drift-avoidance benefit of executing instantly.")
+    elif min_idx == len(impact_results) - 1:
+        print(f"\nOptimal window is the slowest one tested (window={optimal_window}) -- impact")
+        print("dominates so much here that the sweep didn't go slow enough to find the true optimum.")
+    else:
+        print(f"\nOptimal window is INTERIOR: window={optimal_window}, total shortfall "
+              f"{totals[min_idx]:.2f} -- beats both window=1 ({totals[0]:.2f}) and "
+              f"window={windows[-1]} ({totals[-1]:.2f}). Neither 'always instant' nor 'always slow' "
+              f"is optimal once both effects are priced in.")
 
 
 if __name__ == "__main__":
