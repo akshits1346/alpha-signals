@@ -33,6 +33,14 @@ run_pairs_with_execution.py
                         signals from the pairs strategy, routes each
                         one through TWAP execution, reports realized
                         shortfall per entry.
+
+execution_speed_experiment.py / run_execution_speed_experiment.py
+                     -- direct test of WHY shortfall was positive above:
+                        re-runs the SAME entries through TWAP at several
+                        different speeds (1 to 20 slices), holding the
+                        entry set and quantity fixed, to test whether
+                        faster execution actually reduces the shortfall
+                        the mechanism predicts it should.
 ```
 
 ## Build & test
@@ -44,8 +52,10 @@ python3 tests/test_cointegration.py     # 9 checks
 python3 tests/test_pairs_strategy.py    # 5 checks
 python3 tests/test_walk_forward.py      # 6 checks
 python3 tests/test_execution_sim.py     # 8 checks
+python3 tests/test_execution_speed_experiment.py  # 13 checks
 
-python3 run_pairs_with_execution.py     # end-to-end demonstration
+python3 run_pairs_with_execution.py         # end-to-end demonstration
+python3 run_execution_speed_experiment.py   # execution-speed-vs-shortfall experiment
 ```
 
 ## Findings
@@ -82,6 +92,35 @@ the trader. **TWAP-slicing a mean-reversion entry works against the
 same reversion the strategy is betting on** -- a real, explainable
 result, not an artifact of the synthetic data it was demonstrated on.
 
+**4. Testing that mechanism directly: does faster execution actually
+reduce the shortfall?** `run_execution_speed_experiment.py` re-runs the
+same 15 entries (of the 16 above, one excluded for lacking enough
+trailing data at the largest window size) through TWAP at slice counts
+from 1 (near-instant) to 20 (the original setting), holding the entry
+set and order size fixed across every speed so window size is the only
+thing that varies:
+
+| window (slices) | total shortfall | mean shortfall |
+|---|---|---|
+| 1 | 0.00 | 0.00 |
+| 2 | 1438.63 | 95.91 |
+| 3 | 2180.05 | 145.34 |
+| 5 | 2719.50 | 181.30 |
+| 10 | 3093.80 | 206.25 |
+| 20 | 3159.86 | 210.66 |
+
+Shortfall increases monotonically with window size and hits exactly
+zero at window=1 (a single slice fills entirely at the arrival price,
+by definition -- not a finding, a check that the experiment is wired
+up correctly). This directly confirms finding #3's causal claim rather
+than just restating it: it isn't merely that this particular 5-slice
+TWAP setting happened to cost money, it's that execution speed itself
+is a lever on the cost, in the direction the reversion mechanism
+predicts, monotonically, at every window size tested. The exact version
+of this claim (a linear, deterministic reversion path where the
+relationship has a closed form) is proven exactly, not just observed,
+in `tests/test_execution_speed_experiment.py`.
+
 ## Honest limitations
 
 - **All of the above is on synthetic data** (constructed pairs and
@@ -107,9 +146,10 @@ result, not an artifact of the synthetic data it was demonstrated on.
   selection and trading result
 - Replace the execution tie-in's spread-as-price-path assumption with
   a real depth/volume profile from order book data
-- Test whether faster execution (fewer slices, more aggressive) reduces
-  or eliminates the structural shortfall found in finding #3 above --
-  if the mechanism described is really what's driving it, a near-instant
-  fill should show shortfall close to zero
 - Optimize/validate the z-score strategy's parameters via the
   walk-forward framework already built, rather than using un-tuned defaults
+- Now that faster execution is confirmed to reduce shortfall, quantify
+  the actual tradeoff against market impact (this project's execution
+  model has no impact cost, so "always execute in 1 slice" currently
+  looks strictly free -- a real venue would make slicing costly for a
+  different reason, and that's the missing other side of this tradeoff)
