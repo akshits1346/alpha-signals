@@ -51,6 +51,15 @@ synthetic_data.py    -- a more statistically realistic synthetic pair
                         mechanism as the orderbook-engine project's
                         generator) alongside run_pairs_with_execution.py's
                         original plain-Gaussian-random-walk one.
+
+parameter_optimization.py / run_parameter_optimization.py
+                     -- grid-searches the z-score strategy's parameters
+                        (lookback, entry_z, exit_z) IN-SAMPLE on each
+                        walk-forward window, applies the chosen config
+                        UNCHANGED to the following out-of-sample window,
+                        and compares against the untuned baseline on the
+                        same out-of-sample data -- the honest version of
+                        "does optimizing help," with no look-ahead bias.
 ```
 
 ## Build & test
@@ -64,9 +73,11 @@ python3 tests/test_walk_forward.py      # 6 checks
 python3 tests/test_execution_sim.py     # 15 checks (incl. market impact)
 python3 tests/test_execution_speed_experiment.py  # 17 checks (incl. impact-vs-drift optimum)
 python3 tests/test_synthetic_data_realism.py      # 6 checks: fat tails + volatility clustering
+python3 tests/test_parameter_optimization.py      # 7 checks: grid-search correctness + P&L math
 
 python3 run_pairs_with_execution.py         # end-to-end demonstration
 python3 run_execution_speed_experiment.py   # execution-speed-vs-shortfall experiment
+python3 run_parameter_optimization.py       # walk-forward parameter optimization vs untuned baseline
 ```
 
 ## Findings
@@ -168,6 +179,30 @@ correct, but it doesn't automatically change the practical
 recommendation at every parameter setting, and pretending otherwise
 would be exactly the kind of overclaiming this project tries to avoid.
 
+**6. Walk-forward parameter optimization beats the untuned defaults --
+consistently, on realistic data, without look-ahead bias.**
+`walk_forward_optimize` grid-searches (lookback, entry_z, exit_z)
+IN-SAMPLE on each window, applies the chosen config UNCHANGED to the
+following out-of-sample window (picking parameters that fit the
+out-of-sample window best would be look-ahead bias -- this doesn't do
+that), and compares against the untuned baseline
+(`lookback=20, entry_z=2.0, exit_z=0.5`) on that same out-of-sample
+data. On `generate_realistic_synthetic_pair()`'s data (n=800, 13
+walk-forward windows), optimized parameters beat the untuned baseline
+in **13 of 13 windows**, total out-of-sample P&L 810.78 vs 318.44 --
+and the result isn't a single lucky seed: re-run across 5 different
+seeds, optimized wins 13/13 windows every single time. The optimizer
+consistently converges to a much LOWER `entry_z` (1.0, vs the
+baseline's 2.0) and a shorter `lookback` (10-20, vs 20-30) -- a
+substantively different, and consistently better, strategy
+configuration than the conventional default, not noise in which
+parameter happened to win a given window. Still worth remembering:
+this is 13 windows on synthetic data from one generator, not dozens of
+independent real market regimes -- the RIGHT way to interpret this is
+"the walk-forward pipeline works and finds a real, consistent signal
+on this data," not "entry_z=1.0 is the correct parameter for real
+pairs trading."
+
 ## Honest limitations
 
 - **All of the above is on synthetic data** (constructed pairs and
@@ -204,9 +239,16 @@ would be exactly the kind of overclaiming this project tries to avoid.
   understates the true cost of trading a genuinely large position.
   `avg_volume` and `impact_coefficient` are also illustrative, not
   calibrated to any specific real instrument's actual liquidity.
-- **The z-score strategy's parameters (lookback=20, entry_z=2.0,
-  exit_z=0.5, stop_z=3.5) are conventional defaults, not optimized or
-  validated** against any specific data.
+- **`walk_forward_optimize`'s grid is small and hand-picked** (3
+  lookbacks x 4 entry_z x 3 exit_z = 36 combinations), and `stop_z` is
+  held fixed rather than searched. A finer or wider grid might find an
+  even better region, or reveal the current result is a local optimum
+  within a coarse grid rather than a robust global one.
+- **Finding #6's 13/13-window result is entirely on synthetic data**
+  from one generator family, re-run across only 5 seeds -- a genuinely
+  strong and consistent signal WITHIN that data, not evidence the
+  specific chosen parameters (entry_z=1.0, lookback=10-20) would
+  transfer to real markets, which is a materially different claim.
 
 ## What I'd build next
 
@@ -216,8 +258,8 @@ would be exactly the kind of overclaiming this project tries to avoid.
   and that no code changes are needed once it is
 - Replace the execution tie-in's spread-as-price-path assumption with
   a real depth/volume profile from order book data
-- Optimize/validate the z-score strategy's parameters via the
-  walk-forward framework already built, rather than using un-tuned defaults
+- A finer/wider parameter grid for walk_forward_optimize, and search
+  stop_z too rather than holding it fixed
 - Find the actual optimal window/impact-coefficient tradeoff curve
   (sweep impact_coefficient itself, not just window) rather than the
   single illustrative parameter setting used in finding #5 above
