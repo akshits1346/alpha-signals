@@ -41,6 +41,13 @@ execution_speed_experiment.py / run_execution_speed_experiment.py
                         entry set and quantity fixed, to test whether
                         faster execution actually reduces the shortfall
                         the mechanism predicts it should.
+
+synthetic_data.py    -- a more statistically realistic synthetic pair
+                        generator (fat-tailed, volatility-clustered
+                        innovations via Student-t + GARCH(1,1), same
+                        mechanism as the orderbook-engine project's
+                        generator) alongside run_pairs_with_execution.py's
+                        original plain-Gaussian-random-walk one.
 ```
 
 ## Build & test
@@ -53,6 +60,7 @@ python3 tests/test_pairs_strategy.py    # 5 checks
 python3 tests/test_walk_forward.py      # 6 checks
 python3 tests/test_execution_sim.py     # 8 checks
 python3 tests/test_execution_speed_experiment.py  # 13 checks
+python3 tests/test_synthetic_data_realism.py      # 6 checks: fat tails + volatility clustering
 
 python3 run_pairs_with_execution.py         # end-to-end demonstration
 python3 run_execution_speed_experiment.py   # execution-speed-vs-shortfall experiment
@@ -124,11 +132,24 @@ in `tests/test_execution_speed_experiment.py`.
 ## Honest limitations
 
 - **All of the above is on synthetic data** (constructed pairs and
-  spreads with known statistical properties), used specifically to
-  verify the math and mechanisms are implemented correctly. None of it
-  is a claim about real equity pairs. Real price data (e.g. via a
-  financial data API) should replace this before treating any specific
-  number as an actual trading result.
+  spreads with known statistical properties -- `synthetic_data.py`'s
+  generator is statistically validated to reproduce fat tails and
+  volatility clustering, see `tests/test_synthetic_data_realism.py`,
+  which is a materially better stand-in than a plain Gaussian random
+  walk, but is still not real order flow), used specifically to verify
+  the math and mechanisms are implemented correctly. None of it is a
+  claim about real equity pairs. This was a deliberate fallback, not an
+  oversight: this project was built in a sandboxed environment with
+  outbound network access restricted to an allowlist (package
+  registries only) -- every free financial data source tried (e.g.
+  stooq.com) was confirmed unreachable (`EGRESS_BLOCKED`) before
+  falling back to a better synthetic generator instead. Real price data
+  (e.g. via a financial data API, the moment one is reachable) should
+  replace this before treating any specific number as an actual
+  trading result -- `test_cointegration`, `generate_signals`, and
+  `walk_forward_validate` all take plain numpy arrays, so no code
+  changes are needed to point them at real prices instead of
+  `synthetic_data.py`'s output.
 - **The execution tie-in uses the spread series itself as the "price
   path,"** not a real order book's liquidity/depth. A more realistic
   version would replay actual bid/ask depth (e.g. from the
@@ -142,8 +163,10 @@ in `tests/test_execution_speed_experiment.py`.
 
 ## What I'd build next
 
-- Swap in real price data (equities or crypto) for an actual pair
-  selection and trading result
+- Real price data (equities or crypto) for an actual pair selection and
+  trading result, the moment it's reachable from wherever this runs
+  next -- see the honest-limitations note on why it isn't here now,
+  and that no code changes are needed once it is
 - Replace the execution tie-in's spread-as-price-path assumption with
   a real depth/volume profile from order book data
 - Optimize/validate the z-score strategy's parameters via the
